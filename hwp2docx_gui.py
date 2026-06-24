@@ -19,9 +19,18 @@ import queue
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-# 같은 폴더의 hwp2docx 모듈 사용
+# 같은 폴더의 변환 모듈 사용
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwp2docx
+import docx2hwpx
+
+# 변환 방향 정의: (라벨, 모듈, 입력확장자, 파일대화상자 필터)
+DIRECTIONS = {
+    "hwp2docx": ("HWP → DOCX", hwp2docx, ".hwp",
+                 [("한글 문서", "*.hwp"), ("모든 파일", "*.*")]),
+    "docx2hwpx": ("DOCX → HWPX", docx2hwpx, ".docx",
+                  [("워드 문서", "*.docx"), ("모든 파일", "*.*")]),
+}
 
 
 class App:
@@ -31,17 +40,31 @@ class App:
         self.last_outdir = None
         self.busy = False
 
-        root.title("HWP → DOCX 변환기")
-        root.geometry("640x480")
-        root.minsize(520, 400)
+        self.direction = tk.StringVar(value="hwp2docx")
+
+        root.title("한글 ↔ 워드 변환기")
+        root.geometry("640x520")
+        root.minsize(520, 440)
 
         # 상단 안내
-        head = tk.Label(root, text="한글(.hwp) 파일을 워드(.docx)로 변환",
+        head = tk.Label(root, text="한글 ↔ 워드 문서 변환",
                         font=("맑은 고딕", 13, "bold"))
         head.pack(pady=(14, 4))
-        sub = tk.Label(root, text="아래 버튼으로 파일이나 폴더를 선택하세요.",
+        sub = tk.Label(root, text="변환 방향을 고르고, 파일이나 폴더를 선택하세요.",
                        fg="#555", font=("맑은 고딕", 9))
-        sub.pack(pady=(0, 10))
+        sub.pack(pady=(0, 8))
+
+        # 변환 방향 선택
+        dirframe = tk.LabelFrame(root, text="변환 방향", font=("맑은 고딕", 9))
+        dirframe.pack(pady=4)
+        tk.Radiobutton(dirframe, text="HWP → DOCX  (한글 → 워드)",
+                       variable=self.direction, value="hwp2docx",
+                       font=("맑은 고딕", 10)).grid(row=0, column=0, sticky="w",
+                                                   padx=10, pady=2)
+        tk.Radiobutton(dirframe, text="DOCX → HWPX  (워드 → 한글)",
+                       variable=self.direction, value="docx2hwpx",
+                       font=("맑은 고딕", 10)).grid(row=1, column=0, sticky="w",
+                                                   padx=10, pady=2)
 
         # 버튼 영역
         btns = tk.Frame(root)
@@ -75,7 +98,10 @@ class App:
                                    command=self.open_outdir, state="disabled")
         self.btn_open.pack(side="right")
 
-        self._write("준비되었습니다. 변환할 HWP 파일 또는 폴더를 선택하세요.\n", "info")
+        self._write("준비되었습니다. 변환 방향을 고른 뒤 파일 또는 폴더를 선택하세요.\n"
+                    "  • HWP → DOCX : 한글 문서를 워드로\n"
+                    "  • DOCX → HWPX : 워드 문서를 한글로 (한글에서 열어 확인 권장)\n",
+                    "info")
         self.root.after(120, self._drain)
 
     # ---- 로그 ----
@@ -101,25 +127,29 @@ class App:
         self.root.after(120, self._drain)
 
     # ---- 파일/폴더 선택 ----
+    def _cur(self):
+        return DIRECTIONS[self.direction.get()]
+
     def pick_files(self):
         if self.busy:
             return
+        label, _, ext, ftypes = self._cur()
         files = filedialog.askopenfilenames(
-            title="변환할 HWP 파일 선택",
-            filetypes=[("한글 문서", "*.hwp"), ("모든 파일", "*.*")])
+            title="변환할 파일 선택 (%s)" % label, filetypes=ftypes)
         if files:
             self.start(list(files))
 
     def pick_folder(self):
         if self.busy:
             return
-        d = filedialog.askdirectory(title="HWP 파일이 있는 폴더 선택")
+        label, _, ext, _ = self._cur()
+        d = filedialog.askdirectory(title="파일이 있는 폴더 선택 (%s)" % label)
         if not d:
             return
         files = [os.path.join(d, f) for f in os.listdir(d)
-                 if f.lower().endswith(".hwp")]
+                 if f.lower().endswith(ext)]
         if not files:
-            messagebox.showinfo("안내", "선택한 폴더에 .hwp 파일이 없습니다.")
+            messagebox.showinfo("안내", "선택한 폴더에 %s 파일이 없습니다." % ext)
             return
         self.start(files)
 
@@ -129,11 +159,14 @@ class App:
         self.btn_files.config(state="disabled")
         self.btn_folder.config(state="disabled")
         self.btn_open.config(state="disabled")
-        self._write("\n──────── 변환 시작 (%d개) ────────\n" % len(files), "info")
-        t = threading.Thread(target=self._worker, args=(files,), daemon=True)
+        label, module, _, _ = self._cur()
+        self._write("\n──────── %s 변환 시작 (%d개) ────────\n"
+                    % (label, len(files)), "info")
+        t = threading.Thread(target=self._worker, args=(files, module),
+                             daemon=True)
         t.start()
 
-    def _worker(self, files):
+    def _worker(self, files, module):
         ok = 0
         outdir = None
         for i, src in enumerate(files, 1):
@@ -141,7 +174,7 @@ class App:
             self.q.put(("status", "변환 중 %d/%d: %s" % (i, len(files), name)))
             self.q.put(("log", ("• %s ... " % name, None)))
             try:
-                dst = hwp2docx.convert(src)
+                dst = module.convert(src)
                 outdir = os.path.dirname(os.path.abspath(dst))
                 self.q.put(("log", ("완료 → %s\n" % os.path.basename(dst), "ok")))
                 ok += 1
