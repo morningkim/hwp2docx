@@ -69,7 +69,7 @@ class App:
         # 버튼 영역
         btns = tk.Frame(root)
         btns.pack(pady=4)
-        self.btn_files = ttk.Button(btns, text="📄  HWP 파일 선택",
+        self.btn_files = ttk.Button(btns, text="📄  바꿀 파일 선택",
                                     width=22, command=self.pick_files)
         self.btn_files.grid(row=0, column=0, padx=6)
         self.btn_folder = ttk.Button(btns, text="📁  폴더 전체 변환",
